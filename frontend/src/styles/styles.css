@@ -1,0 +1,15 @@
+/* Global stylesheet entry — Tailwind v4 + project design tokens. */
+@import 'tailwindcss';
+@import './theme.css';
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}

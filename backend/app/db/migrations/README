@@ -1,0 +1,10 @@
+Alembic migration environment.
+
+Config only at this stage — no migration scripts yet. Generated revisions
+land in `versions/`. The database URL is resolved at runtime in `env.py`
+from application settings (DATABASE_URL), not hardcoded in alembic.ini.
+
+Create a migration once ORM models exist:
+    alembic revision --autogenerate -m "create <table>"
+Apply migrations:
+    alembic upgrade head

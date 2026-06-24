@@ -1,0 +1,70 @@
+/*
+ * Design tokens — single source of truth for color, typography, and radius.
+ * Mirrors context/ui-context.md. Components reference these tokens only
+ * (via Tailwind utilities or var(--token)); never hardcode hex values.
+ *
+ * Dark mode swaps the raw token values under `.dark`; because the Tailwind
+ * color namespace below is declared with `@theme inline`, every generated
+ * utility resolves through these vars and re-themes automatically.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Core */
+  --bg-base: #f7f6f2;
+  --bg-surface: #ffffff;
+  --text-primary: #1f2a2e;
+  --text-muted: #6b7a80;
+  --accent-primary: #3fa796;
+  --border-default: #e4e2db;
+  --state-error: #d9534f;
+  --state-success: #4c9a75;
+
+  /* Supporting state (live voice session + mood logging) */
+  --accent-hover: #34897a;
+  --accent-subtle: #e3f1ee;
+  --state-recording: #e0795b;
+  --state-warning: #e0a458;
+}
+
+.dark {
+  /* Core */
+  --bg-base: #14181a;
+  --bg-surface: #1c2225;
+  --text-primary: #ecefee;
+  --text-muted: #9aa8ad;
+  --accent-primary: #4fb8a6;
+  --border-default: #2c3438;
+  --state-error: #e5736f;
+  --state-success: #5fae89;
+
+  /* Supporting state */
+  --accent-hover: #5fc7b5;
+  --accent-subtle: #1e3a36;
+  --state-recording: #e88a6e;
+  --state-warning: #e5b26b;
+}
+
+/* Typography tokens — exposed to Tailwind as `font-sans` / `font-mono`. */
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Color namespace — maps the mode-swappable raw tokens into Tailwind's
+   color scale so utilities (bg-*, text-*, border-*) re-theme with `.dark`. */
+@theme inline {
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-text-primary: var(--text-primary);
+  --color-text-muted: var(--text-muted);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-border-default: var(--border-default);
+  --color-state-error: var(--state-error);
+  --color-state-success: var(--state-success);
+  --color-state-recording: var(--state-recording);
+  --color-state-warning: var(--state-warning);
+}

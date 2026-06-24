@@ -1,0 +1,11 @@
+# Environment / secrets — never commit
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Claude Code local settings (permissions, personal config)
+.claude/settings.local.json
+
+# macOS
+.DS_Store
