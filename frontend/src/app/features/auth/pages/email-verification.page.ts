@@ -129,7 +129,7 @@ export class EmailVerificationPage implements OnInit {
     this.auth.establishSession(accessToken).subscribe({
       next: (me) => {
         this.toast.success('Email verified');
-        void this.router.navigateByUrl(me.onboarding_completed ? '/' : '/onboarding');
+        void this.router.navigateByUrl(me.onboarding_completed ? '/dashboard' : '/onboarding');
       },
       error: (err: unknown) => {
         this.state.set('error');

@@ -29,11 +29,30 @@ def get_supabase_client() -> Client:
 
 
 def _translate_auth_error(exc: Exception) -> AppError:
-    """Map a Supabase Auth error into an `AppError` with a sane status code."""
+    """Map a Supabase Auth error into an `AppError` with a sane status code.
+
+    Three cases are distinguished:
+    - Invalid email/password → 401 with a generic "Email or password invalid".
+    - A real HTTP error from Supabase Auth → its own status + message.
+    - A connection/DNS failure (e.g. an unresolvable `SUPABASE_URL`, surfacing
+      as "[Errno 8] nodename nor servname ...") → 503, without leaking the raw
+      socket error to the client, since it is a server-side misconfiguration.
+    """
     status = getattr(exc, "status", None)
+    code = getattr(exc, "code", None)
     message = getattr(exc, "message", None) or str(exc) or "Authentication failed"
-    status_code = status if isinstance(status, int) and 400 <= status < 600 else 400
-    return AppError(message, status_code=status_code)
+
+    if code == "invalid_credentials" or "invalid login credentials" in message.lower():
+        return AppError("Email or password invalid", status_code=401)
+
+    if isinstance(status, int) and 400 <= status < 600:
+        return AppError(message, status_code=status)
+
+    # No HTTP status → the request never reached Supabase (network / DNS / config).
+    return AppError(
+        "Unable to reach the authentication service. Please try again later.",
+        status_code=503,
+    )
 
 
 def register(db: Session, payload: schemas.RegisterIn) -> schemas.RegisterOut:
@@ -75,7 +94,7 @@ def login(db: Session, payload: schemas.LoginIn) -> schemas.AuthTokenOut:
         raise _translate_auth_error(exc) from exc
 
     if result.session is None or result.user is None:
-        raise AppError("Invalid credentials", status_code=401)
+        raise AppError("Email or password invalid", status_code=401)
 
     profile = _ensure_profile(
         db, user_id=uuid.UUID(result.user.id), email=result.user.email or payload.email

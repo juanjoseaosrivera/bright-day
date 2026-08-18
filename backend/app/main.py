@@ -12,6 +12,11 @@ from app.core.exceptions import register_exception_handlers
 from app.core.lifespan import lifespan
 from app.core.logging import configure_logging
 from app.domains.auth.router import router as auth_router
+from app.domains.diary.router import router as diary_router
+from app.domains.insights.router import router as insights_router
+from app.domains.mood.router import router as mood_router
+from app.domains.sessions.router import router as sessions_router
+from app.domains.subscription.router import router as subscription_router
 
 
 def register_routers(app: FastAPI) -> None:
@@ -29,6 +34,31 @@ def register_routers(app: FastAPI) -> None:
         auth_router,
         prefix=f"{settings.api_v1_prefix}/auth",
         tags=["auth"],
+    )
+    app.include_router(
+        subscription_router,
+        prefix=f"{settings.api_v1_prefix}/subscriptions",
+        tags=["subscriptions"],
+    )
+    app.include_router(
+        sessions_router,
+        prefix=f"{settings.api_v1_prefix}/sessions",
+        tags=["sessions"],
+    )
+    app.include_router(
+        diary_router,
+        prefix=f"{settings.api_v1_prefix}/diary",
+        tags=["diary"],
+    )
+    app.include_router(
+        insights_router,
+        prefix=f"{settings.api_v1_prefix}/insights",
+        tags=["insights"],
+    )
+    app.include_router(
+        mood_router,
+        prefix=f"{settings.api_v1_prefix}/mood",
+        tags=["mood"],
     )
 
 

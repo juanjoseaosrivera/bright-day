@@ -30,6 +30,7 @@ bright-day/
 | Text-to-Speech (TTS)    | Kokoro-82M / XTTS v2                         | Open-Source Audio Synthesis    |
 | Database & Embeddings   | Supabase (PostgreSQL + pgvector)             | Vector Storage & Chat History  |
 | Authentication          | Supabase Auth (JWT)                          | Stateless Access Control       |
+| Payments                | Stripe Checkout + Webhooks                   | Subscription Billing           |
 | Storage                 | Supabase Storage (Bucket)                    | Physical audio file storage    |
 
 ## Boundaries
@@ -182,6 +183,19 @@ frontend/
   raw audio never lives in the database. Clients access audio
   through signed/short-lived URLs, never via public paths.
 
+## Billing Model
+
+- **Payment processor: Stripe.** Subscription creation and billing events
+  flow through Stripe Checkout (hosted page) and webhooks. The backend stores
+  subscription state locally (`subscriptions` table: tier, status, weekly
+  quota counters, Stripe IDs) and updates it on Stripe webhook events. The
+  Stripe webhook endpoint is public but must verify the Stripe signature
+  before processing any payload.
+- Tiers: `free` (1 session/week, no charge), `weekly_1` (1/week, paid),
+  `weekly_3` (3/week, paid), `weekly_5` (5/week, paid). The weekly session
+  counter resets lazily (checked on quota reads, not via cron) when
+  `week_reset_at` is more than 7 days ago.
+
 ## Auth and Access Model
 
 - Every user authenticates through Supabase Auth. The frontend
@@ -227,3 +241,35 @@ frontend/
 8. Frontend and backend share no code or runtime — they
    communicate only over the HTTP API contract, and the
    frontend reaches the backend exclusively through `core/`.
+
+## Architecture Decisions
+
+- 2026-06-28 — Insights/mood slice: **pattern detection trigger via asyncio.create_task**.
+  detect_patterns_task is queued in diary/router.py after create_entry and update_entry
+  succeed. Runs as a lightweight background task (same pattern as transcription); not
+  Celery — deferred enough to avoid blocking the request handler, light enough to skip
+  a queue. Requires ≥3 diary entries before running.
+- 2026-06-28 — Insights/mood slice: **atomic pattern replace** (delete + insert in one
+  transaction). Prevents the dashboard from seeing zero patterns between operations.
+- 2026-06-28 — Insights/mood slice: **session overview trigger**. generate_overview_task
+  is queued via asyncio.create_task at the end of transcription.py after complete_transcription
+  succeeds, using the session's user_id already fetched in the worker's DB session.
+- 2026-06-28 — Insights/mood slice: **mood scale 1–5**. One log per user per calendar day;
+  second POST /today within the same day upserts the existing row (200, not 201).
+- 2026-06-28 — Insights/mood slice: **dashboard as primary post-auth landing**. /dashboard
+  receives all post-login, post-onboarding, and post-email-verification redirects. The
+  public home page at / remains for unauthenticated visitors and shows a "Go to Dashboard"
+  CTA when authenticated.
+- 2026-06-28 — Insights/mood slice: **overview in SessionListItem**. overview: str | None
+  added to SessionListItemOut so the dashboard avoids a second round-trip to the session
+  detail endpoint.
+
+## Architecture Carve-outs
+
+- **WebSocket JWT query param (sessions slice, 2026-06-27)**: The
+  WebSocket endpoint `WS /api/v1/sessions/ws/{session_id}` reads the
+  JWT from `?token=` rather than an `Authorization` header. This is a
+  justified deviation from invariant 2's "credentials never in the URL
+  path" guideline: browser `WebSocket()` constructors do not support
+  custom headers. The carve-out is scoped to this single endpoint only;
+  all HTTP routes continue to use `Authorization: Bearer <token>`.

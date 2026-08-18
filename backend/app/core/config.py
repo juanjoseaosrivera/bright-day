@@ -41,6 +41,33 @@ class Settings(BaseSettings):
     supabase_secret_key: str = ""
     supabase_jwt_signin_id: str = ""
 
+    # Stripe — payment processing for subscription management.
+    # Defaults to "" so the app boots without real keys (same pattern as Supabase keys).
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_id_weekly_1: str = ""
+    stripe_price_id_weekly_3: str = ""
+    stripe_price_id_weekly_5: str = ""
+
+    # Sessions / AI — local inference stack and audio storage.
+    # Ollama must be running locally with the configured model pulled.
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_model: str = "llama3.1"
+    whisper_model_size: str = "base"
+    supabase_storage_bucket: str = "sessions-audio"
+
+    # Kokoro TTS model files (resolved relative to the process CWD, i.e. backend/).
+    # If either file is missing, the app runs in text-only mode (no voice output).
+    kokoro_model_path: str = "models/kokoro-v1.0.onnx"
+    kokoro_voices_path: str = "models/voices-v1.0.bin"
+
+    # espeak-ng backend for Kokoro phonemization. Leave empty to auto-detect a
+    # system install (Homebrew / apt). The espeakng-loader wheel that ships with
+    # kokoro-onnx has a broken bundled data path, so a real espeak-ng is required
+    # for voice output. Install: `brew install espeak-ng` (macOS) / `apt install espeak-ng`.
+    espeak_library_path: str = ""
+    espeak_data_path: str = ""
+
     @property
     def is_development(self) -> bool:
         return self.environment == "development"
