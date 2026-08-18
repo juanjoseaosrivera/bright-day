@@ -4,6 +4,7 @@ import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
 
 import { AuthStateService } from '@app/core/services/auth-state.service';
+import { SubscriptionStateService } from '@app/core/services/subscription-state.service';
 
 /**
  * Attaches the bearer token to outgoing requests and, on a 401, clears the
@@ -12,6 +13,7 @@ import { AuthStateService } from '@app/core/services/auth-state.service';
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthStateService);
+  const subState = inject(SubscriptionStateService);
   const router = inject(Router);
 
   const token = auth.token();
@@ -23,6 +25,7 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     catchError((error: HttpErrorResponse) => {
       if (error.status === 401) {
         auth.clear();
+        subState.clear();
         void router.navigateByUrl('/login');
       }
       return throwError(() => error);

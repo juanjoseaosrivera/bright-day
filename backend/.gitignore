@@ -11,3 +11,6 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Local ML model files (downloaded, not committed — see README "Voice / TTS setup")
+models/

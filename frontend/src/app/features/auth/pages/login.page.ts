@@ -102,7 +102,7 @@ export class LoginPage {
     this.auth.login({ email, password }).subscribe({
       next: (res) => {
         this.toast.success('Welcome back');
-        void this.router.navigateByUrl(res.user.onboarding_completed ? '/' : '/onboarding');
+        void this.router.navigateByUrl(res.user.onboarding_completed ? '/dashboard' : '/onboarding');
       },
       error: (err: unknown) => {
         this.submitting.set(false);

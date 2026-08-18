@@ -258,7 +258,7 @@ export class OnboardingPage {
     this.auth.submitOnboarding(body).subscribe({
       next: () => {
         this.toast.success("You're all set");
-        void this.router.navigateByUrl('/');
+        void this.router.navigateByUrl('/dashboard');
       },
       error: (err: unknown) => {
         this.submitting.set(false);

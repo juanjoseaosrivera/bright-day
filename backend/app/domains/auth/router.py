@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.domains.auth import schemas, service
 from app.domains.auth.dependencies import CurrentUser
+from app.domains.subscription import service as subscription_service
 
 router = APIRouter()
 
@@ -45,5 +46,10 @@ def submit_onboarding(
 
 @router.get("/me", response_model=schemas.MeOut)
 def me(current_user: CurrentUser, db: DbSession) -> schemas.MeOut:
-    """Return the authenticated user's profile + onboarding (protected)."""
+    """Return the authenticated user's profile + onboarding (protected).
+
+    Also idempotently provisions the subscription row so every verified user
+    always has a subscription record (spec requirement: auto-provision free tier).
+    """
+    subscription_service.get_or_create_free_subscription(db, current_user.user_id)
     return service.get_me(db, current_user)

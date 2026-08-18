@@ -14,6 +14,11 @@ from sqlalchemy import create_engine, pool
 from app.core.config import get_settings
 from app.db.session import Base
 from app.domains.auth import models as auth_models  # noqa: F401  (registers tables)
+from app.domains.subscription import models as subscription_models  # noqa: F401  (registers tables)
+from app.domains.sessions import models as session_models  # noqa: F401  (registers tables)
+from app.domains.diary import models as diary_models  # noqa: F401  (registers tables)
+from app.domains.insights import models as insights_models  # noqa: F401  (registers tables)
+from app.domains.mood import models as mood_models  # noqa: F401  (registers tables)
 
 # Alembic Config object — provides access to alembic.ini values.
 config = context.config

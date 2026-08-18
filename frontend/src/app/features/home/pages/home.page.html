@@ -1,0 +1,186 @@
+<main class="min-h-screen bg-bg-base">
+
+  <!-- Hero -->
+  <section class="px-4 py-24 text-center md:py-32">
+    <div class="mx-auto max-w-4xl">
+      <p class="text-sm uppercase tracking-widest text-text-muted">Your AI wellbeing companion</p>
+      <h1 class="mt-4 text-4xl font-semibold text-text-primary md:text-6xl">
+        Clarity starts with a conversation.
+      </h1>
+      <p class="mx-auto mt-6 max-w-2xl text-lg text-text-muted md:text-xl">
+        Voice therapy sessions, personal journaling, and AI-powered insights — all in one calm space.
+      </p>
+      <div class="mt-8 flex flex-wrap justify-center gap-3">
+        @if (authState.isAuthenticated()) {
+          <a [routerLink]="['/dashboard']" [class]="bv()">Go to Dashboard</a>
+          <a [routerLink]="['/sessions/new']" [class]="bv({ variant: 'outline' })">Start a Session</a>
+        } @else {
+          <a [routerLink]="['/register']" [class]="bv()">Get Started Free</a>
+          <a [routerLink]="['/login']" [class]="bv({ variant: 'outline' })">Sign In</a>
+        }
+      </div>
+      <p class="mx-auto mt-6 max-w-md text-xs text-text-muted">
+        Bright Day is a complementary wellbeing tool and is not a substitute for professional mental health care.
+      </p>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="px-4 py-16">
+    <div class="mx-auto max-w-5xl">
+      <h2 class="text-center text-2xl font-semibold text-text-primary md:text-3xl">
+        Everything you need to thrive
+      </h2>
+      <div class="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+
+        <app-card class="flex flex-col items-center gap-4 p-6 text-center">
+          <div class="rounded-full bg-accent-subtle p-3">
+            <ng-icon name="lucideMic" class="h-8 w-8 text-accent-primary" />
+          </div>
+          <div>
+            <p class="font-semibold text-text-primary">Voice Sessions</p>
+            <p class="mt-1 text-sm text-text-muted">
+              Talk freely in a guided, hands-free AI therapy session.
+            </p>
+          </div>
+        </app-card>
+
+        <app-card class="flex flex-col items-center gap-4 p-6 text-center">
+          <div class="rounded-full bg-accent-subtle p-3">
+            <ng-icon name="lucideBookOpen" class="h-8 w-8 text-accent-primary" />
+          </div>
+          <div>
+            <p class="font-semibold text-text-primary">Written Diary</p>
+            <p class="mt-1 text-sm text-text-muted">
+              Capture your thoughts privately and revisit them any time.
+            </p>
+          </div>
+        </app-card>
+
+        <app-card class="flex flex-col items-center gap-4 p-6 text-center">
+          <div class="rounded-full bg-accent-subtle p-3">
+            <ng-icon name="lucideBrain" class="h-8 w-8 text-accent-primary" />
+          </div>
+          <div>
+            <p class="font-semibold text-text-primary">AI Insights</p>
+            <p class="mt-1 text-sm text-text-muted">
+              Discover the behavioral patterns that shape your days.
+            </p>
+          </div>
+        </app-card>
+
+        <app-card class="flex flex-col items-center gap-4 p-6 text-center">
+          <div class="rounded-full bg-accent-subtle p-3">
+            <ng-icon name="lucideSmile" class="h-8 w-8 text-accent-primary" />
+          </div>
+          <div>
+            <p class="font-semibold text-text-primary">Mood Tracking</p>
+            <p class="mt-1 text-sm text-text-muted">
+              Log how you're feeling and watch your trends over time.
+            </p>
+          </div>
+        </app-card>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="bg-bg-surface px-4 py-16">
+    <div class="mx-auto max-w-5xl">
+      <h2 class="text-center text-2xl font-semibold text-text-primary md:text-3xl">
+        Simple, flexible plans
+      </h2>
+      <p class="mt-3 text-center text-lg text-text-muted">Start free. Upgrade when you're ready.</p>
+      <div class="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+
+        <!-- Free -->
+        <app-card class="flex flex-col gap-4 p-6">
+          <div class="flex flex-col gap-2">
+            <p class="text-lg font-semibold text-text-primary">Free</p>
+            <app-badge variant="outline">1 / week</app-badge>
+          </div>
+          <p class="text-2xl font-bold text-text-primary">Free forever</p>
+          <ul class="flex flex-1 flex-col gap-1.5 text-sm text-text-muted">
+            <li>1 voice session per week</li>
+            <li>Unlimited diary entries</li>
+            <li>AI behavioral patterns</li>
+          </ul>
+          @if (authState.isAuthenticated()) {
+            <a [routerLink]="['/subscription']" [class]="bv({ variant: 'outline' })">Get Started</a>
+          } @else {
+            <a [routerLink]="['/register']" [class]="bv({ variant: 'outline' })">Get Started</a>
+          }
+        </app-card>
+
+        <!-- Basic -->
+        <app-card class="flex flex-col gap-4 p-6">
+          <div class="flex flex-col gap-2">
+            <p class="text-lg font-semibold text-text-primary">Basic</p>
+            <app-badge variant="outline">1 / week</app-badge>
+          </div>
+          <p class="text-2xl font-bold text-text-primary">From $X/mo</p>
+          <ul class="flex flex-1 flex-col gap-1.5 text-sm text-text-muted">
+            <li>1 voice session per week</li>
+            <li>Unlimited diary entries</li>
+            <li>AI behavioral patterns</li>
+          </ul>
+          @if (authState.isAuthenticated()) {
+            <a [routerLink]="['/subscription']" [class]="bv({ variant: 'outline' })">Start Basic</a>
+          } @else {
+            <a [routerLink]="['/register']" [class]="bv({ variant: 'outline' })">Start Basic</a>
+          }
+        </app-card>
+
+        <!-- Standard (highlighted) -->
+        <app-card class="flex flex-col gap-4 p-6 ring-2 ring-accent-primary">
+          <div class="flex flex-col gap-2">
+            <app-badge>Most popular</app-badge>
+            <p class="text-lg font-semibold text-text-primary">Standard</p>
+            <app-badge variant="outline">3 / week</app-badge>
+          </div>
+          <p class="text-2xl font-bold text-text-primary">From $X/mo</p>
+          <ul class="flex flex-1 flex-col gap-1.5 text-sm text-text-muted">
+            <li>3 voice sessions per week</li>
+            <li>Unlimited diary entries</li>
+            <li>AI behavioral patterns</li>
+          </ul>
+          @if (authState.isAuthenticated()) {
+            <a [routerLink]="['/subscription']" [class]="bv()">Start Standard</a>
+          } @else {
+            <a [routerLink]="['/register']" [class]="bv()">Start Standard</a>
+          }
+        </app-card>
+
+        <!-- Premium -->
+        <app-card class="flex flex-col gap-4 p-6">
+          <div class="flex flex-col gap-2">
+            <p class="text-lg font-semibold text-text-primary">Premium</p>
+            <app-badge variant="outline">5 / week</app-badge>
+          </div>
+          <p class="text-2xl font-bold text-text-primary">From $X/mo</p>
+          <ul class="flex flex-1 flex-col gap-1.5 text-sm text-text-muted">
+            <li>5 voice sessions per week</li>
+            <li>Unlimited diary entries</li>
+            <li>AI behavioral patterns + priority support</li>
+          </ul>
+          @if (authState.isAuthenticated()) {
+            <a [routerLink]="['/subscription']" [class]="bv({ variant: 'outline' })">Start Premium</a>
+          } @else {
+            <a [routerLink]="['/register']" [class]="bv({ variant: 'outline' })">Start Premium</a>
+          }
+        </app-card>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t border-border-default bg-bg-surface py-8 text-center">
+    <p class="text-sm text-text-muted">© 2026 Bright Day. All rights reserved.</p>
+    <p class="mt-2 text-xs text-text-muted">
+      Bright Day is not a licensed medical device and does not provide clinical diagnosis or treatment.
+    </p>
+  </footer>
+
+</main>
