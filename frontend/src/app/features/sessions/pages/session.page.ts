@@ -15,6 +15,8 @@ import { AuthStateService } from '@app/core/services/auth-state.service';
 import { SubscriptionStateService } from '@app/core/services/subscription-state.service';
 import { Badge, Button, Spinner, ToastService } from '@app/shared/ui';
 
+import { ElevenLabsSessionService } from '../services/elevenlabs-session.service';
+
 type SessionState =
   | 'idle'
   | 'requesting_mic'
@@ -33,19 +35,38 @@ interface TranscriptEntry {
 @Component({
   selector: 'app-session-page',
   imports: [Badge, Button, Spinner],
+  providers: [ElevenLabsSessionService],
   changeDetection: ChangeDetectionStrategy.OnPush,
   styles: [
     `
       @keyframes breathe {
-        0%, 100% { transform: scale(1); opacity: 0.85; }
-        50% { transform: scale(1.08); opacity: 1; }
+        0%,
+        100% {
+          transform: scale(1);
+          opacity: 0.85;
+        }
+        50% {
+          transform: scale(1.08);
+          opacity: 1;
+        }
       }
       @keyframes pulse-fast {
-        0%, 100% { transform: scale(1); opacity: 1; }
-        50% { transform: scale(1.12); opacity: 0.8; }
+        0%,
+        100% {
+          transform: scale(1);
+          opacity: 1;
+        }
+        50% {
+          transform: scale(1.12);
+          opacity: 0.8;
+        }
       }
-      .anim-breathe { animation: breathe 3s ease-in-out infinite; }
-      .anim-pulse { animation: pulse-fast 1.2s ease-in-out infinite; }
+      .anim-breathe {
+        animation: breathe 3s ease-in-out infinite;
+      }
+      .anim-pulse {
+        animation: pulse-fast 1.2s ease-in-out infinite;
+      }
     `,
   ],
   template: `
@@ -82,7 +103,12 @@ interface TranscriptEntry {
         sessionState() === 'ai_thinking' ||
         sessionState() === 'ai_speaking'
       ) {
-        <button appButton variant="outline" class="border-state-error px-8 py-3 text-base text-state-error" (click)="endSession()">
+        <button
+          appButton
+          variant="outline"
+          class="border-state-error px-8 py-3 text-base text-state-error"
+          (click)="endSession()"
+        >
           End Session
         </button>
       }
@@ -99,7 +125,8 @@ interface TranscriptEntry {
                 <span
                   class="text-xs font-semibold"
                   [class]="entry.speaker === 'You' ? 'text-accent-primary' : 'text-text-primary'"
-                >{{ entry.speaker }}</span>
+                  >{{ entry.speaker }}</span
+                >
                 <p class="mt-0.5 text-sm text-text-primary">{{ entry.text }}</p>
               </div>
             }
@@ -116,6 +143,7 @@ export class SessionPage implements OnDestroy {
   private readonly subState = inject(SubscriptionStateService);
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
+  private readonly elevenLabs = inject(ElevenLabsSessionService);
 
   protected readonly sessionState = signal<SessionState>('idle');
   protected readonly transcript = signal<TranscriptEntry[]>([]);
@@ -130,6 +158,9 @@ export class SessionPage implements OnDestroy {
   private rafId: number | null = null;
   private recordedChunks: Blob[] = [];
   private utteranceHasAudio = false;
+  /** Set only in ElevenLabs mode; doubles as the "which mode am I in" flag. */
+  private elevenLabsSessionId: string | null = null;
+  private elevenLabsFinishing = false;
 
   protected readonly orbClass = computed(() => {
     const base = 'h-48 w-48 rounded-full transition-colors duration-500 ';
@@ -149,27 +180,44 @@ export class SessionPage implements OnDestroy {
 
   protected readonly stateLabel = computed(() => {
     switch (this.sessionState()) {
-      case 'idle': return 'Ready to begin';
-      case 'requesting_mic': return 'Requesting microphone access…';
-      case 'connecting': return 'Connecting…';
-      case 'listening': return 'Listening — speak freely';
-      case 'ai_thinking': return 'Bright Day is thinking…';
-      case 'ai_speaking': return 'Bright Day is speaking…';
-      case 'ending': return 'Ending session…';
-      case 'done': return 'Session complete';
+      case 'idle':
+        return 'Ready to begin';
+      case 'requesting_mic':
+        return 'Requesting microphone access…';
+      case 'connecting':
+        return 'Connecting…';
+      case 'listening':
+        return 'Listening — speak freely';
+      case 'ai_thinking':
+        return 'Bright Day is thinking…';
+      case 'ai_speaking':
+        return 'Bright Day is speaking…';
+      case 'ending':
+        return 'Ending session…';
+      case 'done':
+        return 'Session complete';
     }
   });
 
   protected startSession(): void {
     this.sessionState.set('requesting_mic');
 
+    // Mic permission is requested before POST /sessions in both modes. In
+    // ElevenLabs mode that also keeps the permission prompt ahead of minting the
+    // signed URL, which is only valid for 15 minutes.
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then((stream) => {
         this.mediaStream = stream;
         this.sessionState.set('connecting');
         this.sessionApi.startSession().subscribe({
-          next: ({ id, ws_token }) => this.openWebSocket(id, ws_token, stream),
+          next: (session) => {
+            if (session.mode === 'elevenlabs') {
+              this.startElevenLabsSession(session.id, session.signed_url, stream);
+            } else {
+              this.openWebSocket(session.id, session.ws_token, stream);
+            }
+          },
           error: (err: unknown) => {
             console.error('[session] POST /sessions failed', err);
             this.sessionState.set('idle');
@@ -184,6 +232,83 @@ export class SessionPage implements OnDestroy {
         this.toast.error('Microphone access denied');
       });
   }
+
+  // --- ElevenLabs mode -----------------------------------------------------
+
+  private startElevenLabsSession(
+    sessionId: string,
+    signedUrl: string | null,
+    stream: MediaStream,
+  ): void {
+    if (!signedUrl) {
+      console.error('[session] elevenlabs mode without a signed_url');
+      this.sessionState.set('idle');
+      this.toast.error('Could not start session');
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    // The SDK opens its own microphone stream, so release ours — we only held it
+    // to get the permission prompt out of the way. Two live captures of the same
+    // device is wasted work and can degrade echo cancellation.
+    stream.getTracks().forEach((t) => t.stop());
+    this.mediaStream = null;
+    this.elevenLabsSessionId = sessionId;
+
+    void this.elevenLabs
+      .start(signedUrl, {
+        onConnected: () => this.sessionState.set('listening'),
+        onModeChange: (mode) =>
+          this.sessionState.set(mode === 'speaking' ? 'ai_speaking' : 'listening'),
+        onTranscript: (speaker, text) => {
+          if (!text.trim()) return;
+          this.transcript.update((t) => [...t, { speaker, text }]);
+        },
+        onDisconnected: (wasError) => {
+          if (wasError) {
+            this.handleWsError();
+          } else if (this.sessionState() !== 'done') {
+            // Agent hung up on its own (e.g. max duration reached).
+            void this.finishElevenLabsSession();
+          }
+        },
+        onError: (message) => console.error('[session] elevenlabs error', message),
+      })
+      .catch((err: unknown) => {
+        console.error('[session] elevenlabs startSession failed', err);
+        this.sessionState.set('idle');
+        this.toast.error('Could not connect to the voice agent');
+      });
+  }
+
+  /**
+   * End the conversation and tell the backend to reconcile it.
+   *
+   * The completion call is only a latency optimisation — the backend reconciles
+   * abandoned sessions on its own — so a failure here is logged, not surfaced,
+   * and never blocks the redirect.
+   */
+  private async finishElevenLabsSession(): Promise<void> {
+    // Re-entrancy guard: `stop()` below makes the SDK fire its own onDisconnect,
+    // which routes back here. Without this, ending a session would POST /complete
+    // and navigate twice.
+    if (this.elevenLabsFinishing) return;
+    this.elevenLabsFinishing = true;
+    this.sessionState.set('ending');
+
+    const sessionId = this.elevenLabsSessionId;
+    await this.elevenLabs.stop();
+    this.sessionState.set('done');
+
+    if (sessionId) {
+      this.sessionApi.completeSession(sessionId).subscribe({
+        error: (err: unknown) => console.error('[session] POST /complete failed', err),
+      });
+    }
+    void this.router.navigateByUrl('/sessions');
+  }
+
+  // --- Local mode ----------------------------------------------------------
 
   private openWebSocket(sessionId: string, token: string, stream: MediaStream): void {
     const wsBase = this.apiBaseUrl.replace(/^http/, 'ws');
@@ -250,20 +375,23 @@ export class SessionPage implements OnDestroy {
     if (this.audioContext.state === 'suspended') {
       void this.audioContext.resume();
     }
-    this.audioContext.decodeAudioData(buffer.slice(0)).then((audioBuffer) => {
-      this.sessionState.set('ai_speaking');
-      const source = this.audioContext!.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(this.audioContext!.destination);
-      source.onended = () => {
-        if (this.sessionState() === 'ai_speaking') {
-          this.sessionState.set('listening');
-        }
-      };
-      source.start();
-    }).catch((err: unknown) => {
-      console.error('[session] TTS decode failed', err);
-    });
+    this.audioContext
+      .decodeAudioData(buffer.slice(0))
+      .then((audioBuffer) => {
+        this.sessionState.set('ai_speaking');
+        const source = this.audioContext!.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.audioContext!.destination);
+        source.onended = () => {
+          if (this.sessionState() === 'ai_speaking') {
+            this.sessionState.set('listening');
+          }
+        };
+        source.start();
+      })
+      .catch((err: unknown) => {
+        console.error('[session] TTS decode failed', err);
+      });
   }
 
   // Preferred first; Safari supports none of the webm/ogg types and needs mp4.
@@ -284,9 +412,7 @@ export class SessionPage implements OnDestroy {
       settings: track?.getSettings?.(),
     });
 
-    const mimeType = SessionPage.MIME_CANDIDATES.find((t) =>
-      MediaRecorder.isTypeSupported(t),
-    );
+    const mimeType = SessionPage.MIME_CANDIDATES.find((t) => MediaRecorder.isTypeSupported(t));
 
     try {
       this.mediaRecorder = mimeType
@@ -295,7 +421,8 @@ export class SessionPage implements OnDestroy {
     } catch (err) {
       console.error('[session] MediaRecorder construction failed', mimeType, err);
       this.toast.error('Could not start recording', {
-        description: 'A browser extension may be blocking it — try a window with extensions disabled.',
+        description:
+          'A browser extension may be blocking it — try a window with extensions disabled.',
       });
       this.endSession();
       return;
@@ -307,12 +434,15 @@ export class SessionPage implements OnDestroy {
       if (e.data.size > 0) {
         this.recordedChunks.push(e.data);
         if (this.ws?.readyState === WebSocket.OPEN && this.sessionState() === 'listening') {
-          e.data.arrayBuffer().then((buf) => {
-            if (this.ws?.readyState === WebSocket.OPEN && this.sessionState() === 'listening') {
-              this.ws.send(buf);
-              this.utteranceHasAudio = true;
-            }
-          }).catch((err: unknown) => console.error('[session] chunk send failed', err));
+          e.data
+            .arrayBuffer()
+            .then((buf) => {
+              if (this.ws?.readyState === WebSocket.OPEN && this.sessionState() === 'listening') {
+                this.ws.send(buf);
+                this.utteranceHasAudio = true;
+              }
+            })
+            .catch((err: unknown) => console.error('[session] chunk send failed', err));
         }
       }
     };
@@ -322,7 +452,8 @@ export class SessionPage implements OnDestroy {
     } catch (err) {
       console.error('[session] MediaRecorder.start failed', this.mediaRecorder.mimeType, err);
       this.toast.error('Could not start recording', {
-        description: 'A browser extension may be blocking it — try a window with extensions disabled.',
+        description:
+          'A browser extension may be blocking it — try a window with extensions disabled.',
       });
       this.endSession();
       return;
@@ -351,8 +482,7 @@ export class SessionPage implements OnDestroy {
       this.analyserNode.getByteTimeDomainData(data);
       // RMS of waveform: values are 0-255 centered at 128 (silence).
       // Dividing by 128 normalises to 0.0-1.0 range.
-      const rms =
-        Math.sqrt(data.reduce((sum, v) => sum + (v - 128) ** 2, 0) / data.length) / 128;
+      const rms = Math.sqrt(data.reduce((sum, v) => sum + (v - 128) ** 2, 0) / data.length) / 128;
       const isSilent = rms < 0.02;
 
       if (isSilent && this.sessionState() === 'listening') {
@@ -381,6 +511,10 @@ export class SessionPage implements OnDestroy {
   }
 
   protected endSession(): void {
+    if (this.elevenLabsSessionId) {
+      void this.finishElevenLabsSession();
+      return;
+    }
     this.mediaRecorder?.stop();
     this.cleanupAudio();
     if (this.ws?.readyState === WebSocket.OPEN) {
@@ -431,5 +565,6 @@ export class SessionPage implements OnDestroy {
     this.mediaRecorder?.stop();
     this.ws?.close();
     this.mediaStream?.getTracks().forEach((t) => t.stop());
+    void this.elevenLabs.stop();
   }
 }

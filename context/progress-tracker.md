@@ -5,6 +5,114 @@ change.
 
 ## Current Phase
 
+- ElevenLabs mode brought up against real infrastructure (2026-09-20):
+  - **Migration `0007` applied.** It first failed on a detail worth remembering: the revision
+    id `0007_add_session_provider_columns` is 33 chars and `alembic_version.version_num` is
+    `VARCHAR(32)`, so the DDL succeeded and the bookkeeping `UPDATE` blew up. Transactional
+    DDL rolled the whole thing back cleanly. Renamed to `0007_session_provider_columns` (29)
+    and applied; `sessions.provider` (NOT NULL, default `'local'`),
+    `provider_conversation_id`, and the partial unique index are live, existing rows
+    backfilled to `local`. **Keep future revision ids under 32 characters.**
+  - **Env vars corrected.** `.env` had `ELEVEN_LABS_API_KEY` / `AGENT_ID`, which
+    `Settings` (`extra="ignore"`) silently discarded, so the app was quietly running in
+    `local` mode with empty credentials. Now `VOICE_PROVIDER` / `ELEVENLABS_API_KEY` /
+    `ELEVENLABS_AGENT_ID`, and `use_elevenlabs_voice` resolves True.
+  - **The agent is authored in the dashboard, not in this repo.** The live agent
+    ("Psychologist Adam") runs a ~6.9k-char English Stoic-logotherapy prompt on
+    `gemini-2.5-flash-lite`. `THERAPY_SYSTEM_PROMPT_V1` in `ai/prompts/therapy.py` is a short,
+    unrelated prompt. **They are not synchronized and never were** — the earlier claim that
+    the repo prompt "is pushed to the agent server-side" was aspirational, and is now
+    corrected in `backend/README.md`. therapy.py governs the **local** provider only.
+  - **New `backend/scripts/sync_elevenlabs_agent.py`** makes the *settings* half of that
+    claim true: dry-run by default, `--apply` to write, idempotent, re-reads after the PATCH
+    to prove the change stuck. It enforces only what the browser could subvert (all overrides
+    off — walked recursively so future overrides default off — plus `enable_auth`,
+    `record_voice`, `max_duration_seconds`, required client events) and deliberately does not
+    touch `retention_days`, the prompt, voice, language, or LLM.
+  - **Still pending: `--apply` has not been run.** Dry run shows exactly three changes:
+    `auth.enable_auth False → True`, `overrides…agent.language True → False`,
+    `max_duration_seconds 1200 → 1800`. Until that lands **the agent is public** — anyone
+    with the agent id can converse on this account, bypassing subscription and quota
+    entirely. Retention is at the 2-year default (730) by explicit decision to leave it.
+  - **Feature-breaking bug found and fixed: `conversation_id` is not in the response body.**
+    `GET /convai/conversation/get-signed-url?include_conversation_id=true` returns a body of
+    `{"signed_url": …}` only — the flag puts the id in the signed URL's *query string*
+    (`?agent_id=…&conversation_id=…&conversation_signature=…`). `create_signed_url` read only
+    the body, so it always returned None, `provider_conversation_id` was always stored NULL,
+    and `_load_pending` bailed on every session: **no ElevenLabs session would ever have
+    reconciled** — no transcript, no archived audio, no quota charge, stuck in
+    `recording`/`processing` until the safety net marked it failed. Now parsed from the URL
+    with the body kept as a forward-compatible fallback, and the "missing id" log raised from
+    warning to error since it means the session is unrecoverable. Verified live.
+  - **The agent id is not a secret and cannot be one.** It is a query parameter on the signed
+    URL handed to the browser, so it is visible in devtools on every session. The security
+    boundary is `conversation_signature` (single-use, 15-minute validity) plus
+    `auth.enable_auth = true`; the id is an identifier, not a credential.
+  - **Known rough edge:** the agent's first message uses `{{first_name}}`, and the frontend
+    sends no conversation config by design, so it falls back to the placeholder default
+    ("user"). Either change the default to something neutral or drop the variable.
+
+- ElevenLabs voice sessions, switchable via one env var (2026-09-06):
+  - **Goal:** run live voice sessions on the ElevenLabs Agents Platform (their STT + LLM +
+    TTS, full-duplex with native barge-in) while keeping the local Whisper/Ollama/Kokoro
+    loop fully intact and reachable by flipping `VOICE_PROVIDER` back to `local`.
+  - **Shape: browser-direct.** The browser connects to the agent with `@elevenlabs/client`;
+    the backend mints a single-use signed URL (`include_conversation_id=true`, so the
+    conversation id is recorded server-side and never asserted by the client) and reconciles
+    the finished conversation afterwards, fetching the transcript and the two-sided
+    recording. A backend relay was rejected — see the decisions in `architecture.md`.
+  - **Security decision: all agent overrides stay disabled.** In browser-direct mode the
+    browser is what sends `conversation_config_override`, so enabling system-prompt override
+    would let any subscriber strip the invariant-6 topic guard from devtools. The prompt is
+    pushed to the agent server-side from `ai/prompts/therapy.py`. Cost: `{display_name}`
+    personalization is dropped in ElevenLabs mode.
+  - **Backend:** `Settings.voice_provider` + `use_elevenlabs_voice`, `elevenlabs_api_key`,
+    `elevenlabs_agent_id`; new `app/ai/agents/` adapter (`elevenlabs.py` + `schemas.py`,
+    sync `httpx.Client`, tenacity retry that skips 4xx, Pydantic-validated responses);
+    `lifespan.py` skips Whisper + Kokoro entirely in ElevenLabs mode (~350 MB and the whole
+    espeak-ng setup burden) but always builds the Ollama client; migration `0007` adds
+    `sessions.provider` + `provider_conversation_id` with a partial unique index;
+    `POST /sessions` returns `mode` + `signed_url`; new `POST /sessions/{id}/complete`;
+    new `workers/elevenlabs_session.py` reconcile task.
+  - **Exactly-once quota** via a compare-and-swap on `sessions.status`
+    (`complete_elevenlabs_session`): a late `/complete`, the safety-net poller and a restart
+    retry can all race, and only the caller that wins the transition charges. Charged after
+    the *transcript* is persisted (the audio download can fail independently), not after the
+    audio upload as in the local path.
+  - **Abandonment:** a reconcile task is armed at `POST /sessions` with a 5-minute delay, so
+    a closed tab still gets reconciled instead of leaving a row stuck in `recording`. A
+    conversation still at `initiated` after the signed URL's 15-minute validity window is
+    given up on (it can never start), rather than held for the full 2-hour wait.
+  - **Frontend:** `@elevenlabs/client` added; new
+    `features/sessions/services/elevenlabs-session.service.ts` wraps the SDK (loaded via
+    dynamic `import()`, so the session-page chunk stays 12 kB and local mode never downloads
+    the ~590 kB SDK); `session.page.ts` branches on the server-provided `mode` with the local
+    path untouched; the previously dead `'You'` transcript branch is now live, since
+    ElevenLabs reports user transcripts.
+  - **Verified:** backend boots in ElevenLabs mode with Whisper/Kokoro skipped and Ollama +
+    Supabase still initialised; `alembic upgrade head --sql` renders `0007` cleanly offline;
+    all four `/sessions` routes registered and `StartSessionOut` stays additive (`id` and
+    `ws_token` still required); reconcile orchestration exercised across 8 stubbed scenarios
+    (happy path, no saved audio, audio download failure, conversation failed, never-started
+    grace, already-reconciled, lost CAS race, unknown status) — quota charged exactly once on
+    success and never on failure; `npm run build` passes.
+  - **Not yet verified — needs a real agent + reachable Supabase:** whether
+    `include_conversation_id=true` actually returns `conversation_id` (the documented
+    response schema lists only `signed_url`; the adapter logs a warning and the partial
+    unique index is the fallback), the real content-type of the conversation-audio endpoint
+    (`extension_for_content_type` maps it at runtime and defaults to mp3), and the full
+    end-to-end flow. `ELEVENLABS_API_KEY` / `ELEVENLABS_AGENT_ID` are unset, and the
+    configured `SUPABASE_URL` host does not currently resolve on this machine.
+    *(Superseded 2026-09-20 — see the deployment entry below.)*
+  - **Pre-existing bug found, not fixed (separate slice):** `asyncio.create_task()` inside a
+    plain `def` FastAPI handler raises `RuntimeError: no running event loop`, because the
+    handler runs in the threadpool. `diary/router.py` does exactly this in `create_entry` and
+    `update_entry`, so **`POST /diary` and `PUT /diary/{id}` currently return 500** and
+    `detect_patterns_task` never runs. The new session handlers avoid it by being `async def`
+    with `asyncio.to_thread` for the blocking DB work. Related and also unfixed: the workers'
+    `asyncio.to_thread(lambda: _llm_client.chat.completions.create(...))` returns an
+    un-awaited coroutine because the client is `AsyncOpenAI`, so overviews stay empty.
+
 - Sessions nav redirect fix (2026-08-17):
   - **Bug: the first click on "Sessions" landed on `/subscription`.** `subscriptionGuard` read
     `hasActiveSubscription()` synchronously, but nothing ever loaded `SubscriptionStateService`
@@ -446,6 +554,11 @@ change.
 - Manual infrastructure wiring per spec 09: Supabase Session pooler DATABASE_URL,
   `alembic upgrade head`, Supabase dashboard auth/storage config, Ollama install,
   Stripe test-mode keys and CLI webhook listener.
+- ElevenLabs agent settings: run `uv run python scripts/sync_elevenlabs_agent.py --apply`
+  from `backend/`. The agent is created public, so until this runs the subscription and
+  quota gating can be bypassed by anyone holding the agent id. Prompt, voice, language, LLM
+  and `retention_days` stay authored in the dashboard. See `backend/README.md`
+  "ElevenLabs voice sessions".
 
 ## Next Up
 

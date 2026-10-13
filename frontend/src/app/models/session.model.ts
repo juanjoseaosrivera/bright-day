@@ -23,7 +23,18 @@ export interface SessionListItem {
   overview: string | null;
 }
 
+/** Which voice stack a session runs on, chosen by the backend. */
+export type SessionMode = 'local' | 'elevenlabs';
+
 export interface StartSessionOut {
   id: string;
   ws_token: string;
+  /**
+   * `local` — connect to our own `WS /sessions/ws/{id}?token={ws_token}`.
+   * `elevenlabs` — connect to `signed_url` with the ElevenLabs SDK, then
+   * `POST /sessions/{id}/complete` when the conversation ends.
+   */
+  mode: SessionMode;
+  /** Single-use ElevenLabs WebSocket URL; null in local mode. */
+  signed_url: string | null;
 }

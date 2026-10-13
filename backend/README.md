@@ -146,6 +146,9 @@ Once running:
 | `STRIPE_PRICE_ID_WEEKLY_1` | Stripe Price ID for 1 session/week tier |
 | `STRIPE_PRICE_ID_WEEKLY_3` | Stripe Price ID for 3 sessions/week tier |
 | `STRIPE_PRICE_ID_WEEKLY_5` | Stripe Price ID for 5 sessions/week tier |
+| `VOICE_PROVIDER` | `local` (Whisper + Ollama + Kokoro) \| `elevenlabs` (Agents Platform) — live voice loop only |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key; only read when `VOICE_PROVIDER=elevenlabs` |
+| `ELEVENLABS_AGENT_ID` | ElevenLabs agent id; only read when `VOICE_PROVIDER=elevenlabs` |
 | `OLLAMA_BASE_URL` | Ollama API base URL, default `http://localhost:11434/v1` |
 | `OLLAMA_MODEL` | Model name to use, default `llama3.1` |
 | `WHISPER_MODEL_SIZE` | `base` (dev) \| `small` \| `medium` (prod) |
@@ -224,7 +227,43 @@ Copy the printed webhook signing secret into `STRIPE_WEBHOOK_SECRET` in your `.e
 
 ---
 
+## ElevenLabs voice sessions (`VOICE_PROVIDER=elevenlabs`)
+
+An alternative to the local voice stack: the browser connects straight to an [ElevenLabs agent](https://elevenlabs.io/docs/eleven-agents/overview) that runs STT, the LLM, and TTS as one full-duplex service with native interruption handling. The backend mints a single-use signed URL, records the conversation id, and reconciles the finished conversation afterwards.
+
+Set `VOICE_PROVIDER=elevenlabs` and restart. Whisper and Kokoro are then **not loaded at all**, so none of the "Voice / TTS setup" below applies — no model files, no `espeak-ng`. Set it back to `local` and restart to switch back; nothing else changes.
+
+Note this flag covers **live voice sessions only**. Diary pattern detection and session overviews always run on Ollama, so Ollama stays a prerequisite in both modes.
+
+### Required agent configuration
+
+Create the agent in the ElevenLabs dashboard, author its prompt/voice/language there, then put its id and an API key in `.env` and run:
+
+```bash
+uv run python scripts/sync_elevenlabs_agent.py            # dry run — prints a diff
+uv run python scripts/sync_elevenlabs_agent.py --apply    # write the changes
+```
+
+That script is the repo-side source of truth for the settings the browser could otherwise subvert. It is idempotent, so re-run it whenever the dashboard drifts. What it enforces, and why each one is load-bearing rather than cosmetic:
+
+1. **Overrides: all OFF.** In this architecture the *browser* holds the signed URL and therefore sends the `conversation_config_override` frame. Enabling system-prompt override would let any subscriber replace the prompt from devtools and strip the wellbeing topic guard, the no-diagnosis rule, and the not-a-replacement-for-professional-care language. Language and text-only overrides are disabled for the same reason. The script walks the override tree recursively, so an override ElevenLabs adds later defaults to off instead of silently shipping enabled.
+2. **Signed URLs (`auth.enable_auth = true`), not an allowlist.** ElevenLabs does not support both on one agent. A new agent is created **public**: until this is on, anyone holding the agent id can converse on your account, bypassing the subscription and quota checks entirely — which is the whole point of minting signed URLs server-side.
+3. **Privacy → audio saving ON**, or there is no recording for the reconcile worker to archive and session detail pages get no player.
+4. **`max_duration_seconds` = 1800.** The dashboard default is well short of a real session, and the agent simply hangs up when it is reached. A functional limit, not just a cost control.
+5. **Client events** include `user_transcript` and `agent_response`, which drive the live transcript in `session.page.ts`.
+
+Two things the script deliberately leaves alone, because they are product decisions rather than code ones:
+
+- **`privacy.retention_days`.** The dashboard default is 2 years. Session audio and transcripts persisting on a third party for that long is a choice to make deliberately for a wellbeing product, not to inherit. Your own Supabase copy is independent of this setting.
+- **The system prompt, first message, language, voice, and LLM.** These are authored in the dashboard, which is canonical for them. `app/ai/prompts/therapy.py` is the prompt for the **local** provider only — the two are not synchronized, and a change to one does not affect the other.
+
+> If the agent's first message or prompt uses a `{{variable}}` placeholder, set a sensible default under **Dynamic variables** in the dashboard. The frontend deliberately sends no conversation config (see `elevenlabs-session.service.ts`), so any placeholder without a default will render as its fallback rather than a real value.
+
+---
+
 ## Voice / TTS setup
+
+> Only applies when `VOICE_PROVIDER=local` (the default). In ElevenLabs mode neither the model files nor `espeak-ng` are needed.
 
 The AI's spoken replies are synthesized with [Kokoro ONNX](https://github.com/thewh1teagle/kokoro-onnx). Two one-time setup steps are required.
 

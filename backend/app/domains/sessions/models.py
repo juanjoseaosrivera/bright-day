@@ -39,6 +39,17 @@ class Session(Base):
     # Lifecycle: recording → processing → ready | failed
     status: Mapped[str] = mapped_column(String(16), nullable=False)
 
+    # Which voice stack produced this session: "local" (Whisper + Ollama + Kokoro
+    # over our own WebSocket) or "elevenlabs" (browser ↔ ElevenLabs agent).
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="local", default="local"
+    )
+
+    # ElevenLabs conversation id, minted server-side alongside the signed URL.
+    # Null for local sessions. Uniquely indexed (partial, where not null) so one
+    # conversation can never be claimed by two sessions.
+    provider_conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Set after end-of-session audio upload; null while session is live.
     audio_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
 

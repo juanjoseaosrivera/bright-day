@@ -17,7 +17,15 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 
 from app.core.exceptions import AppError
 from app.core.security import InvalidTokenError, verify_supabase_jwt
@@ -28,6 +36,7 @@ from app.domains.sessions import service as session_service
 from app.domains.subscription.dependencies import RequireActiveSubscription
 from app.domains.subscription import service as subscription_service
 from app.storage import audio as audio_storage
+from app.workers import elevenlabs_session as elevenlabs_worker
 from app.workers import transcription as transcription_worker
 from sqlalchemy.orm import Session as DBSession
 
@@ -40,17 +49,48 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# How long to wait before the abandonment safety net starts polling. The normal
+# path (client POSTs /complete when the conversation ends) wins this race for any
+# ordinary session; this only matters when the tab is closed or the client crashes.
+_RECONCILE_SAFETY_NET_DELAY_SECONDS = 5 * 60.0
+
+
 @router.post("/", response_model=schemas.StartSessionOut, status_code=201)
-def start_session(
+async def start_session(
     request: Request,
     current_user: CurrentUser,
     _sub: RequireActiveSubscription,
     db: DBSession = Depends(get_db),
 ) -> schemas.StartSessionOut:
-    session = session_service.start_session(current_user.user_id, db)
+    """Create a session row and, in ElevenLabs mode, mint its signed URL.
+
+    `async def` for the same reason as `complete_session`: it detaches a background
+    task, which needs a running event loop in the calling thread.
+    """
+    session, signed_url = await asyncio.to_thread(
+        session_service.start_session, current_user.user_id, db
+    )
     auth_header = request.headers.get("Authorization", "")
     ws_token = auth_header.removeprefix("Bearer ").strip()
-    return schemas.StartSessionOut(id=session.id, ws_token=ws_token)
+
+    if session.provider == "elevenlabs":
+        # Nothing server-side observes an ElevenLabs conversation ending, so arm a
+        # reconciler now. Without it, a closed tab would leave the row stuck in
+        # 'recording' forever — the failure mode already recorded on 2026-08-10.
+        asyncio.create_task(
+            elevenlabs_worker.reconcile_session_task(
+                session_id=session.id,
+                supabase_client=request.app.state.supabase_storage,
+                initial_delay_seconds=_RECONCILE_SAFETY_NET_DELAY_SECONDS,
+            )
+        )
+
+    return schemas.StartSessionOut(
+        id=session.id,
+        ws_token=ws_token,
+        mode=schemas.SessionMode(session.provider),
+        signed_url=signed_url,
+    )
 
 
 @router.get("/", response_model=list[schemas.SessionListItemOut])
@@ -88,6 +128,44 @@ def get_session(
         ended_at=session.ended_at,
         created_at=session.created_at,
     )
+
+
+@router.post("/{session_id}/complete", status_code=202)
+async def complete_session(
+    session_id: uuid.UUID,
+    request: Request,
+    current_user: CurrentUser,
+    db: DBSession = Depends(get_db),
+) -> Response:
+    """Signal that an ElevenLabs conversation has ended; queue reconciliation.
+
+    This is a latency optimisation, not the authority: a client that never calls
+    it is still reconciled by the safety-net poller armed when the session starts.
+    So it is safe to call twice, and safe never to call at all — the exactly-once
+    quota charge is enforced by the status compare-and-swap in the service, not here.
+
+    Unlike the other HTTP handlers this one is `async def`, because it detaches a
+    long-running background task with `asyncio.create_task`, which needs a running
+    event loop in the calling thread. Blocking DB work therefore goes through
+    `asyncio.to_thread`.
+    """
+    session = await asyncio.to_thread(
+        session_service.get_session, session_id, current_user.user_id, db
+    )
+    if session.provider != "elevenlabs":
+        raise AppError("This session does not run on ElevenLabs", status_code=400)
+
+    await asyncio.to_thread(
+        session_service.mark_processing, session_id, current_user.user_id, db
+    )
+
+    asyncio.create_task(
+        elevenlabs_worker.reconcile_session_task(
+            session_id=session_id,
+            supabase_client=request.app.state.supabase_storage,
+        )
+    )
+    return Response(status_code=202)
 
 
 # ---------------------------------------------------------------------------

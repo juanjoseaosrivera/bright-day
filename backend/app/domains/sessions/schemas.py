@@ -16,6 +16,13 @@ class SessionStatus(str, Enum):
     failed = "failed"
 
 
+class SessionMode(str, Enum):
+    """Which voice stack a session runs on — mirrors `Session.provider`."""
+
+    local = "local"
+    elevenlabs = "elevenlabs"
+
+
 class SessionOut(BaseModel):
     id: uuid.UUID
     status: SessionStatus
@@ -44,3 +51,11 @@ class SessionListItemOut(BaseModel):
 class StartSessionOut(BaseModel):
     id: uuid.UUID
     ws_token: str
+
+    # How the client should run this session. `local` → connect to our own
+    # WS /sessions/ws/{id}?token={ws_token}. `elevenlabs` → connect straight to
+    # `signed_url` with the ElevenLabs browser SDK, then POST /sessions/{id}/complete.
+    # `ws_token` is populated in both modes (it is just the echoed bearer), so the
+    # client branches on `mode`, not on which fields are present.
+    mode: SessionMode = SessionMode.local
+    signed_url: str | None = None

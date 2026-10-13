@@ -3,6 +3,10 @@
 Heavy clients (Whisper STT, Kokoro TTS, Ollama LLM, Supabase Storage) are
 initialized once on startup and attached to app.state so request handlers and
 WebSocket handlers can access them without re-initialization.
+
+Whisper and Kokoro are skipped entirely when VOICE_PROVIDER=elevenlabs — they
+only serve the local voice turn loop. The Ollama client and Supabase Storage are
+built in both modes.
 """
 
 from __future__ import annotations
@@ -54,57 +58,74 @@ def _resolve_espeak(settings) -> tuple[str, str] | None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
 
-    # --- Whisper STT (always loaded) ---
-    from faster_whisper import WhisperModel
-
-    logger.info("Loading Whisper model '%s'…", settings.whisper_model_size)
-    _app.state.whisper_model = WhisperModel(
-        settings.whisper_model_size, device="cpu", compute_type="int8"
-    )
-    logger.info("Whisper model loaded.")
-
-    # --- Kokoro TTS (conditional — missing model files means text-only mode) ---
-    model_path = settings.kokoro_model_path
-    voices_path = settings.kokoro_voices_path
-    if not (os.path.exists(model_path) and os.path.exists(voices_path)):
-        logger.error(
-            "Kokoro model files missing (model=%s exists=%s, voices=%s exists=%s) "
-            "— voice output disabled (text-only). See README 'Voice / TTS setup'.",
-            model_path,
-            os.path.exists(model_path),
-            voices_path,
-            os.path.exists(voices_path),
+    # Whisper and Kokoro only serve the local voice turn loop (ai/graph.py). When
+    # voice sessions run on ElevenLabs the browser talks to their agent directly,
+    # so loading them would cost ~350 MB of RAM and the whole espeak-ng/Kokoro
+    # setup burden for nothing. Flipping VOICE_PROVIDER needs a restart either way
+    # (get_settings() is lru_cache'd and the WS path reads app.state), so skipping
+    # them costs nothing in switch-back speed.
+    if settings.use_elevenlabs_voice:
+        logger.info(
+            "VOICE_PROVIDER=elevenlabs — skipping Whisper STT and Kokoro TTS; "
+            "live voice sessions run on the ElevenLabs Agents Platform."
         )
+        _app.state.whisper_model = None
         _app.state.tts_pipeline = None
     else:
-        try:
-            from kokoro_onnx import Kokoro  # type: ignore[import-untyped]
-            from kokoro_onnx.config import EspeakConfig  # type: ignore[import-untyped]
+        # --- Whisper STT ---
+        from faster_whisper import WhisperModel
 
-            espeak = _resolve_espeak(settings)
-            if espeak is None:
-                logger.error(
-                    "No usable espeak-ng found (the bundled espeakng-loader data path "
-                    "is broken) — voice output disabled. Install espeak-ng "
-                    "(`brew install espeak-ng` / `apt install espeak-ng`) or set "
-                    "ESPEAK_LIBRARY_PATH. See README 'Voice / TTS setup'."
-                )
-                _app.state.tts_pipeline = None
-            else:
-                lib_path, data_path = espeak
-                # kokoro-onnx also reads this env var to locate the shared library.
-                os.environ.setdefault("PHONEMIZER_ESPEAK_LIBRARY", lib_path)
-                _app.state.tts_pipeline = Kokoro(
-                    model_path,
-                    voices_path,
-                    espeak_config=EspeakConfig(lib_path=lib_path, data_path=data_path),
-                )
-                logger.info("Kokoro TTS initialized (espeak-ng: %s).", lib_path)
-        except Exception as exc:
-            logger.exception("Kokoro TTS failed to initialize (%s) — text-only mode.", exc)
+        logger.info("Loading Whisper model '%s'…", settings.whisper_model_size)
+        _app.state.whisper_model = WhisperModel(
+            settings.whisper_model_size, device="cpu", compute_type="int8"
+        )
+        logger.info("Whisper model loaded.")
+
+        # --- Kokoro TTS (conditional — missing model files means text-only mode) ---
+        model_path = settings.kokoro_model_path
+        voices_path = settings.kokoro_voices_path
+        if not (os.path.exists(model_path) and os.path.exists(voices_path)):
+            logger.error(
+                "Kokoro model files missing (model=%s exists=%s, voices=%s exists=%s) "
+                "— voice output disabled (text-only). See README 'Voice / TTS setup'.",
+                model_path,
+                os.path.exists(model_path),
+                voices_path,
+                os.path.exists(voices_path),
+            )
             _app.state.tts_pipeline = None
+        else:
+            try:
+                from kokoro_onnx import Kokoro  # type: ignore[import-untyped]
+                from kokoro_onnx.config import EspeakConfig  # type: ignore[import-untyped]
+
+                espeak = _resolve_espeak(settings)
+                if espeak is None:
+                    logger.error(
+                        "No usable espeak-ng found (the bundled espeakng-loader data path "
+                        "is broken) — voice output disabled. Install espeak-ng "
+                        "(`brew install espeak-ng` / `apt install espeak-ng`) or set "
+                        "ESPEAK_LIBRARY_PATH. See README 'Voice / TTS setup'."
+                    )
+                    _app.state.tts_pipeline = None
+                else:
+                    lib_path, data_path = espeak
+                    # kokoro-onnx also reads this env var to locate the shared library.
+                    os.environ.setdefault("PHONEMIZER_ESPEAK_LIBRARY", lib_path)
+                    _app.state.tts_pipeline = Kokoro(
+                        model_path,
+                        voices_path,
+                        espeak_config=EspeakConfig(lib_path=lib_path, data_path=data_path),
+                    )
+                    logger.info("Kokoro TTS initialized (espeak-ng: %s).", lib_path)
+            except Exception as exc:
+                logger.exception("Kokoro TTS failed to initialize (%s) — text-only mode.", exc)
+                _app.state.tts_pipeline = None
 
     # --- LLM client (OpenAI-compatible, pointed at local Ollama) ---
+    # Always built, regardless of VOICE_PROVIDER: diary pattern detection and
+    # session overviews run on Ollama in both modes (ElevenLabs has no general
+    # chat-completions API).
     import openai
 
     _app.state.llm_client = openai.AsyncOpenAI(
@@ -141,6 +162,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         )
 
     # --- Wire Whisper model into the transcription background worker ---
+    # None in ElevenLabs mode; that worker is only queued by the local WS path,
+    # and it already refuses to run without a model.
     from app.workers.transcription import set_whisper_model
 
     set_whisper_model(_app.state.whisper_model)

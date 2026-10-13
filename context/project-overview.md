@@ -32,6 +32,16 @@ The backend receives the definitive audio file, processes it, and uploads it sec
 7. State Synchronization & Redirection
 The user is automatically redirected to the session history view. The application invalidates the previous query cache or updates the local reactive state, positioning the newly completed session at the very top of the chronological list.
 
+> **Amended 2026-09-06 — steps 3, 4 and 6 under `VOICE_PROVIDER=elevenlabs`.** When voice
+> sessions run on the ElevenLabs Agents Platform the browser connects directly to the agent
+> rather than to our server, so the client does **not** buffer audio locally and the backend
+> does **not** receive a definitive audio file from the client. Instead the backend mints a
+> single-use signed URL up front, and after the conversation ends it fetches the transcript
+> and the two-sided recording from ElevenLabs and uploads that to the storage bucket. The
+> outcome in step 6 is unchanged — a DB row with a secure URL reference and timestamps — but
+> the audio arrives from the provider, not the browser. Steps 1, 2, 5 and 7 are unaffected.
+> Under the default `VOICE_PROVIDER=local` the flow above is accurate as written.
+
 ## Features
 
 ### Authintication

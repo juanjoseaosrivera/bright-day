@@ -28,6 +28,12 @@ bright-day/
 | Language Model (LLM)    | Llama 3.1 (8B/70B) / Mistral (7B)            | Reasoning Engine (Self-Hosted) |
 | Speech-to-Text (STT)    | Faster-Whisper (OpenAI Whisper)              | Real-time Audio Transcription  |
 | Text-to-Speech (TTS)    | Kokoro-82M / XTTS v2                         | Open-Source Audio Synthesis    |
+| Voice agent (alternate) | ElevenLabs Agents Platform                   | Third-party STT + LLM + TTS    |
+
+The LLM / STT / TTS rows describe `VOICE_PROVIDER=local`, the default. Under
+`VOICE_PROVIDER=elevenlabs` the live voice session uses none of them — STT, the
+LLM, and TTS for that flow are all third-party. Diary pattern detection and
+session overviews stay on the self-hosted LLM in both modes.
 | Database & Embeddings   | Supabase (PostgreSQL + pgvector)             | Vector Storage & Chat History  |
 | Authentication          | Supabase Auth (JWT)                          | Stateless Access Control       |
 | Payments                | Stripe Checkout + Webhooks                   | Subscription Billing           |
@@ -227,7 +233,14 @@ frontend/
    verified by the backend, not the UI.
 4. Raw audio is stored only in object storage; the database
    holds metadata and a URL reference, and audio is served only
-   through signed URLs.
+   through signed URLs. (Amended 2026-09-06: under
+   `VOICE_PROVIDER=elevenlabs` the audio also transits and is
+   retained by ElevenLabs, which records the conversation and
+   hands the backend a copy to archive. The invariant still
+   holds for our own systems — the DB stores only a path, and
+   playback is still signed-URL only — but ElevenLabs is a
+   second resting place for session audio and transcripts, with
+   a retention period configured on their side.)
 5. External input (request payloads, LLM outputs) is validated
    against Pydantic schemas at the boundary before it is
    trusted or persisted.
@@ -263,6 +276,35 @@ frontend/
 - 2026-06-28 — Insights/mood slice: **overview in SessionListItem**. overview: str | None
   added to SessionListItemOut so the dashboard avoids a second round-trip to the session
   detail endpoint.
+
+- 2026-09-06 — ElevenLabs voice sessions: **`VOICE_PROVIDER` selects the live voice
+  loop**, `local` (default) or `elevenlabs`. It governs the voice turn loop only —
+  `workers/patterns.py` and `workers/overviews.py` always use Ollama, because ElevenLabs
+  has no general chat-completions API. Whisper and Kokoro are not loaded at all in
+  ElevenLabs mode; the Ollama client and Supabase Storage are built in both.
+- 2026-09-06 — ElevenLabs voice sessions: **browser-direct, not a backend relay**. The
+  browser connects to the agent itself with `@elevenlabs/client`; the backend mints a
+  signed URL and reconciles the conversation afterwards. A relay was rejected because it
+  would put an asyncio hop on every audio frame in a full-duplex barge-in loop, and would
+  mean reimplementing the mic capture, playback queueing, and interruption handling the SDK
+  already provides. (The often-cited reason — that ElevenLabs needs PCM while the browser
+  produces WebM/Opus — is *not* the reason: an `AudioWorklet` can produce PCM directly.)
+- 2026-09-06 — ElevenLabs voice sessions: **no client-side conversation overrides**. Since
+  the browser holds the signed URL, it is also what sends
+  `conversation_config_override`. Enabling system-prompt override would let any subscriber
+  replace the prompt from devtools and strip the invariant-6 topic guard, so all overrides
+  stay disabled on the agent and the prompt is pushed server-side from
+  `ai/prompts/therapy.py`. Consequence: `{display_name}` personalization is dropped in
+  ElevenLabs mode rather than being passed as a client-supplied dynamic variable.
+- 2026-09-06 — ElevenLabs voice sessions: **the backend mints the conversation id**, via
+  `get-signed-url?include_conversation_id=true`, and stores it before responding. The
+  client never asserts which conversation belongs to a session (invariant 2), and
+  `POST /sessions/{id}/complete` therefore takes no body.
+- 2026-09-06 — ElevenLabs voice sessions: **quota is charged after the transcript is
+  persisted**, not after the audio upload as in the local path. The user got the value the
+  moment the conversation happened, and the audio download can fail independently. Charging
+  is exactly-once via a compare-and-swap on `sessions.status`, so a late `/complete`, a
+  re-armed poller, and a restart retry cannot double-charge.
 
 ## Architecture Carve-outs
 

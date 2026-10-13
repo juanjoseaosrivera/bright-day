@@ -49,6 +49,21 @@ class Settings(BaseSettings):
     stripe_price_id_weekly_3: str = ""
     stripe_price_id_weekly_5: str = ""
 
+    # Voice provider — selects the implementation of the LIVE VOICE TURN LOOP only.
+    #   "local"      → Whisper STT + Ollama LLM + Kokoro TTS, orchestrated by ai/graph.py
+    #                  over our own WebSocket (app/domains/sessions/router.py).
+    #   "elevenlabs" → the browser talks directly to an ElevenLabs agent, which runs
+    #                  STT + LLM + TTS; the backend mints the signed URL and reconciles
+    #                  the finished conversation afterwards.
+    # This flag does NOT affect diary pattern detection or session overviews — those
+    # stay on Ollama unconditionally (ElevenLabs has no general chat-completions API).
+    voice_provider: str = "local"  # local | elevenlabs
+
+    # ElevenLabs Agents Platform — only read when voice_provider == "elevenlabs".
+    # Defaults to "" so the app boots without real keys (same pattern as Supabase/Stripe).
+    elevenlabs_api_key: str = ""
+    elevenlabs_agent_id: str = ""
+
     # Sessions / AI — local inference stack and audio storage.
     # Ollama must be running locally with the configured model pulled.
     ollama_base_url: str = "http://localhost:11434/v1"
@@ -71,6 +86,11 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.environment == "development"
+
+    @property
+    def use_elevenlabs_voice(self) -> bool:
+        """True when live voice sessions run on the ElevenLabs Agents Platform."""
+        return self.voice_provider.strip().lower() == "elevenlabs"
 
     @property
     def supabase_jwks_url(self) -> str:
